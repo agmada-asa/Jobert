@@ -8,20 +8,17 @@ and delivered straight to a Telegram group chat.
 
 ## How it works
 
-| Component | Technology |
-|-----------|-----------|
-| Language | Python 3.11 |
-| Scheduling | GitHub Actions (`cron` — every 6 hours) |
-| Notifications | Telegram Bot API (`requests`) |
+| Component      | Technology                                   |
+| -------------- | -------------------------------------------- |
+| Language       | Python 3.11                                  |
+| Scheduling     | GitHub Actions (`cron` — every 6 hours)      |
+| Notifications  | Telegram Bot API (`requests`)                |
 | State tracking | `seen_jobs.json` committed back to this repo |
 
 ### Sources scraped
 
-1. **Trackr** — queries the hidden backend JSON API  
-   (`https://trackr.lol/api/opportunities`)
-2. **Simplify Summer Internships** — parses the community-maintained GitHub
-   raw Markdown table  
-   (`SimplifyJobs/Summer2025-Internships`)
+1. **Trackr** — queries the backend programmes API  
+   (`https://api.the-trackr.com/programmes?region=UK&industry=Technology&season=2026&type=summer-internships`)
 
 ---
 
@@ -48,10 +45,10 @@ and delivered straight to a Telegram group chat.
    **Actions** → **New repository secret**.
 2. Add two secrets:
 
-   | Name | Value |
-   |------|-------|
+   | Name             | Value                        |
+   | ---------------- | ---------------------------- |
    | `TELEGRAM_TOKEN` | The bot token from BotFather |
-   | `CHAT_ID` | Your Telegram chat/group ID |
+   | `CHAT_ID`        | Your Telegram chat/group ID  |
 
 ### 4 · Enable GitHub Actions (if not already enabled)
 
@@ -87,5 +84,5 @@ Actions tab → **Job Scraper** → **Run workflow** → **Run workflow**.
   `.github/workflows/scraper.yml`.
 - **Filter different roles** — update the `_ROLE_KEYWORDS` regex in
   `scraper.py`.
-- **Trackr real endpoint** — replace `TRACKR_API_URL` with the actual hidden
-  API URL discovered via browser DevTools (Network tab).
+- **Trackr endpoint** — update `TRACKR_API_URL` query parameters if you want a
+  different region, industry, season, or programme type.

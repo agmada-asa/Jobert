@@ -107,9 +107,11 @@ def format_job_message(job: dict[str, str]) -> str:
 # Scraper 1 — Trackr JSON API (mock / real)
 # ---------------------------------------------------------------------------
 
-# Replace this URL with the real Trackr hidden API endpoint once discovered
-# (e.g. via browser DevTools → Network tab).
-TRACKR_API_URL = "https://trackr.lol/api/opportunities"
+# Trackr programmes API for UK Technology Summer Internships (2026 season).
+TRACKR_API_URL = (
+    "https://api.the-trackr.com/programmes?region=UK&industry=Technology"
+    "&season=2026&type=summer-internships"
+)
 
 # Keywords used to filter relevant opportunities.
 _ROLE_KEYWORDS = re.compile(
@@ -127,13 +129,17 @@ def scrape_trackr() -> list[dict[str, str]]:
     """
     Fetch jobs from the Trackr hidden JSON API.
 
-    Expected API response shape (array of objects):
+        Expected API response shape (array of objects):
         [
           {
-            "id": "abc123",
-            "title": "Software Engineering Intern",
-            "company": "Acme Corp",
-            "url": "https://apply.example.com/job/abc123"
+                        "id": "03lef43vs8",
+                        "name": "Software Engineering Internship",
+                        "url": "https://..." | null,
+                        "categories": ["Software Engineering"],
+                        "company": {
+                            "id": "two-sigma",
+                            "name": "Two Sigma"
+                        }
           },
           ...
         ]
@@ -145,7 +151,7 @@ def scrape_trackr() -> list[dict[str, str]]:
     try:
         response = requests.get(TRACKR_API_URL, headers=HEADERS, timeout=20)
         response.raise_for_status()
-        data: list[dict[str, Any]] = response.json()
+        data: Any = response.json()
     except requests.RequestException as exc:
         print(f"WARNING: Could not reach Trackr API: {exc}")
         return jobs
@@ -153,19 +159,45 @@ def scrape_trackr() -> list[dict[str, str]]:
         print(f"WARNING: Trackr API returned invalid JSON: {exc}")
         return jobs
 
+    if not isinstance(data, list):
+        print("WARNING: Trackr API response is not a list; skipping.")
+        return jobs
+
     for item in data:
-        title: str = str(item.get("title", ""))
-        if not _is_relevant(title):
+        if not isinstance(item, dict):
             continue
-        job_id = str(item.get("id", ""))
+
+        role: str = str(item.get("name") or item.get("title") or "")
+        categories = item.get("categories")
+        categories_text = ""
+        if isinstance(categories, list):
+            categories_text = " ".join(str(cat) for cat in categories)
+
+        if not _is_relevant(f"{role} {categories_text}".strip()):
+            continue
+
+        job_id = str(item.get("id") or "")
         if not job_id:
             continue
+
+        company_info = item.get("company")
+        company_name = "Unknown"
+        if isinstance(company_info, dict):
+            company_name = str(company_info.get("name") or "Unknown")
+        elif item.get("company"):
+            company_name = str(item.get("company"))
+
+        link = str(item.get("url") or "").strip()
+        if not link:
+            # Fallback to the public programme page when direct apply URL is missing.
+            link = f"https://the-trackr.com/programmes/{job_id}"
+
         jobs.append(
             {
                 "id": f"trackr_{job_id}",
-                "role": title,
-                "company": str(item.get("company", "Unknown")),
-                "link": str(item.get("url", "#")),
+                "role": role or "Unknown Role",
+                "company": company_name,
+                "link": link,
             }
         )
     print(f"Trackr: found {len(jobs)} relevant jobs.")
