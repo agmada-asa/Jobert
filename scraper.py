@@ -173,91 +173,6 @@ def scrape_trackr() -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Scraper 2 — Simplify / GitHub internship tracker (raw Markdown)
-# ---------------------------------------------------------------------------
-
-# Raw URL of the README in the popular community-maintained internship list.
-SIMPLIFY_RAW_URL = (
-    "https://raw.githubusercontent.com/"
-    "SimplifyJobs/Summer2025-Internships/dev/README.md"
-)
-
-# Matches a full Markdown table row: starts with | and ends with |.
-# We split on | ourselves to avoid assumptions about column count.
-_MD_ROW_RE = re.compile(r"^\|(.+)\|$", re.MULTILINE)
-_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']')
-
-# Matches header-separator rows such as |---|:---|:---:|
-_SEPARATOR_RE = re.compile(r"^[\s|:\-]+$")
-
-
-def scrape_simplify() -> list[dict[str, str]]:
-    """
-    Parse the Simplify Summer Internships README table and return jobs.
-
-    Returns a normalised list:
-        [{"id": str, "role": str, "company": str, "link": str}, ...]
-    """
-    jobs: list[dict[str, str]] = []
-    try:
-        response = requests.get(SIMPLIFY_RAW_URL, headers=HEADERS, timeout=30)
-        response.raise_for_status()
-        markdown = response.text
-    except requests.RequestException as exc:
-        print(f"WARNING: Could not fetch Simplify README: {exc}")
-        return jobs
-
-    seen_ids: set[str] = set()
-    for match in _MD_ROW_RE.finditer(markdown):
-        raw_row = match.group(1)
-
-        # Split the row into cells on "|"
-        cells = [c.strip() for c in raw_row.split("|")]
-
-        # Need at least company + role + one more column
-        if len(cells) < 3:
-            continue
-
-        company = cells[0]
-        role = cells[1]
-
-        # Skip separator rows (e.g. |---|---|---|)
-        if _SEPARATOR_RE.match(raw_row):
-            continue
-
-        # Skip header rows: any cell that is a plain text column label
-        if role.lower() in {"role", "position", "title", "job title"}:
-            continue
-        # Also skip rows whose company cell looks like a separator
-        if re.match(r"^[-:\s]+$", company):
-            continue
-
-        if not _is_relevant(role):
-            continue
-
-        # Find the first cell that contains an application link
-        link = "#"
-        for cell in cells:
-            href_match = _HREF_RE.search(cell)
-            if href_match:
-                link = href_match.group(1)
-                break
-
-        # Derive a stable ID from company + role slug
-        slug = re.sub(r"[^a-z0-9]+", "_", f"{company}_{role}".lower()).strip("_")
-        job_id = f"simplify_{slug}"
-
-        if job_id in seen_ids:
-            continue
-        seen_ids.add(job_id)
-
-        jobs.append({"id": job_id, "role": role, "company": company, "link": link})
-
-    print(f"Simplify: found {len(jobs)} relevant jobs.")
-    return jobs
-
-
-# ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
 
@@ -275,7 +190,6 @@ def run() -> None:
 
     all_jobs: list[dict[str, str]] = []
     all_jobs.extend(scrape_trackr())
-    all_jobs.extend(scrape_simplify())
 
     new_jobs = [job for job in all_jobs if job["id"] not in seen_set]
     print(f"Total new jobs to notify: {len(new_jobs)}")
