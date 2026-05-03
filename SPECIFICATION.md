@@ -53,7 +53,7 @@ page — all without exposing any user data to the group.
 | :--- | :--- | :--- |
 | **Orchestrator** | Python (FastAPI) | Async-friendly; consistent with existing scraper codebase |
 | **Scheduler / Scraper** | GitHub Actions (existing) | Keep free; no change needed |
-| **LLM** | Gemini 2.0 Flash (user-supplied key) | Free tier per user; 1,500 req/day per key |
+| **LLM** | Gemini 3 Flash (user-supplied key) | Free tier per user; 1,500 req/day per key |
 | **Knowledge Base** | Private Notion API (user-supplied token) | Clean review UI; user already owns the workspace |
 | **User Database** | Supabase Free Tier (Postgres) | Maps Telegram IDs to encrypted credentials |
 | **CV / File Storage** | Supabase Storage (free tier) | Keeps CVs off Telegram's servers |
@@ -197,5 +197,5 @@ Only warranted once Phases 1–3 are stable and the answer quality is validated.
 | Fly.io / DigitalOcean (FastAPI host) | Free – $4/mo |
 | Supabase (database + storage) | Free tier |
 | Notion API | Free |
-| LLM (Gemini 2.0 Flash, BYOK) | **$0 to operator** |
+| LLM (Gemini 3 Flash, BYOK) | **$0 to operator** |
 | **Total** | **$0 – $4/mo** |

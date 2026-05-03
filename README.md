@@ -1,88 +1,83 @@
 # Jobert
 
-A lightweight, **serverless** job scraper that tracks new Software Engineering,
-AI, Quant internships, and Spring Weeks — hosted 100 % free on GitHub Actions
-and delivered straight to a Telegram group chat.
+Jobert is an AI-powered job application assistant that tracks internships and helps you prepare applications using your CV and a Notion-based Knowledge Base.
 
 ---
 
-## How it works
+## Architecture
 
-| Component      | Technology                                   |
-| -------------- | -------------------------------------------- |
-| Language       | Python 3.11                                  |
-| Scheduling     | GitHub Actions (`cron` — every 6 hours)      |
-| Notifications  | Telegram Bot API (`requests`)                |
-| State tracking | `seen_jobs.json` committed back to this repo |
-
-### Sources scraped
-
-1. **Trackr** — queries the backend programmes API  
-   (`https://api.the-trackr.com/programmes?region=UK&industry=Technology&season=2026&type=summer-internships`)
+| Component | Technology |
+| :--- | :--- |
+| **Scraper** | Python 3.11 (GitHub Actions) |
+| **Orchestrator** | FastAPI |
+| **Onboarding Bot** | Telegram Bot API (`python-telegram-bot`) |
+| **Database** | Supabase (Postgres + Storage) |
+| **AI Agent** | Gemini 3 Flash |
+| **Knowledge Base** | Notion API |
 
 ---
 
-## One-time setup
+## One-time Setup
 
-### 1 · Create a Telegram Bot
+### 1 · Telegram Configuration
+1. **Create a Bot**: Chat with [@BotFather](https://t.me/BotFather), send `/newbot`, and save your **Bot Token**.
+2. **Get Chat ID**:
+   - Add your bot to a group.
+   - Send a message (e.g., `/test`).
+   - Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`.
+   - Copy the `id` from the `"chat"` object (e.g., `-100...`).
 
-1. Open Telegram and start a chat with **@BotFather**.
-2. Send `/newbot` and follow the prompts to choose a name and username.
-3. BotFather will reply with your **Bot Token** — copy it (looks like
-   `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`).
+### 2 · Supabase Configuration
+1. **Database**: Run the SQL in `schema.sql` in your Supabase SQL Editor.
+2. **Storage**: Create a **public** bucket named `cv_storage` in Supabase Storage.
+3. **Credentials**: Copy your `SUPABASE_URL` and `SUPABASE_KEY` (service_role) from **Project Settings → API**.
 
-### 2 · Get your Telegram Chat ID
+### 3 · Encryption Key
+Generate a secure 32-byte key for encrypting user tokens:
+```bash
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-1. Add the bot to your group (or use a private chat).
-2. Send any message in that chat.
-3. Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in your browser.
-4. Find `"chat": {"id": -100XXXXXXXXXX}` — that number is your **Chat ID**
-   (group IDs are negative).
-
-### 3 · Add GitHub Repository Secrets
-
-1. Go to your repository → **Settings** → **Secrets and variables** →
-   **Actions** → **New repository secret**.
-2. Add two secrets:
-
-   | Name             | Value                        |
-   | ---------------- | ---------------------------- |
-   | `TELEGRAM_TOKEN` | The bot token from BotFather |
-   | `CHAT_ID`        | Your Telegram chat/group ID  |
-
-### 4 · Enable GitHub Actions (if not already enabled)
-
-Go to **Actions** tab → click **"I understand my workflows, go ahead and
-enable them"** if prompted.
-
-### 5 · (Optional) Trigger a first run manually
-
-Actions tab → **Job Scraper** → **Run workflow** → **Run workflow**.
+### 4 · Notion Integration
+1. Go to [Notion Integrations](https://www.notion.so/my-integrations).
+2. Create a new "Internal Integration".
+3. **IMPORTANT**: On a page in your Notion workspace, click `...` → `Connect to` → Select your integration. This allows the bot to create your KB page.
 
 ---
 
-## File structure
+## Running the Application
 
+### Local Development
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   pip install -r backend/requirements.txt
+   ```
+2. **Configure `.env`**: Copy `.env.example` to `.env` and fill in all values.
+3. **Start the Onboarding Bot**:
+   ```bash
+   python -m backend.bot
+   ```
+4. **Start the API Orchestrator**:
+   ```bash
+   uvicorn backend.main:app --reload
+   ```
+
+### Deployment
+The scraper continues to run on **GitHub Actions**. The backend (FastAPI + Bot) is designed to run on **Fly.io**, **DigitalOcean**, or any persistent VPS.
+
+---
+
+## Project Structure
 ```
 .
-├── .github/
-│   └── workflows/
-│       └── scraper.yml   # GitHub Actions workflow (runs every 6 h)
-├── scraper.py             # Main scraper + notification logic
-├── requirements.txt       # Python dependencies
-├── seen_jobs.json         # Persisted list of already-notified job IDs
-└── README.md
+├── backend/
+│   ├── bot.py           # Telegram Onboarding Flow
+│   ├── database.py      # Supabase & Storage interactions
+│   ├── encryption.py    # Fernet encryption for secrets
+│   ├── notion_api.py    # Notion KB creation & population
+│   └── main.py          # FastAPI Orchestrator
+├── schema.sql           # Database schema
+├── scraper.py           # Legacy scraper (GitHub Actions)
+└── SPECIFICATION.md     # Technical roadmap
 ```
-
----
-
-## Customisation
-
-- **Add new sources** — add a new `scrape_*()` function in `scraper.py` and
-  call it inside `run()`.
-- **Change the schedule** — edit the `cron` expression in
-  `.github/workflows/scraper.yml`.
-- **Filter different roles** — update the `_ROLE_KEYWORDS` regex in
-  `scraper.py`.
-- **Trackr endpoint** — update `TRACKR_API_URL` query parameters if you want a
-  different region, industry, season, or programme type.
