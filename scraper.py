@@ -230,6 +230,36 @@ def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
+# Link Verification
+# ---------------------------------------------------------------------------
+
+
+def _is_active(link: str) -> bool:
+    """Check if the given apply link actually resolves to an active application page."""
+    if not link:
+        return False
+        
+    # If the link is already a trackr programme page, it's preemptive/not active.
+    if "the-trackr.com/programmes/" in link:
+        return False
+        
+    try:
+        response = requests.get(link, headers=HEADERS, allow_redirects=True, timeout=10)
+        # If it redirected to a trackr programme page, the original link is not active.
+        if "the-trackr.com/programmes/" in response.url:
+            return False
+            
+        # Treat 404 or server errors as inactive
+        if response.status_code >= 400:
+            return False
+            
+        return True
+    except requests.RequestException:
+        # Fails to connect/timeout -> assume inactive to avoid false positives.
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
 
@@ -249,10 +279,18 @@ def run() -> None:
     all_jobs.extend(scrape_trackr())
 
     new_jobs = [job for job in all_jobs if job["id"] not in seen_set]
-    print(f"Total new jobs to notify: {len(new_jobs)}")
+    
+    active_new_jobs = []
+    for job in new_jobs:
+        if _is_active(job["link"]):
+            active_new_jobs.append(job)
+        else:
+            print(f"Skipping inactive job: {job['role']} @ {job['company']}")
+
+    print(f"Total new active jobs to notify: {len(active_new_jobs)}")
 
     newly_sent: list[str] = []
-    for job in new_jobs:
+    for job in active_new_jobs:
         message = format_job_message(job)
         success = send_telegram_message(message)
         if success:
