@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Jobert AI Assistant",
+  "version": "0.1.1",
+  "description": "Apply to jobs with AI using your Jobert Knowledge Base.",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.greenhouse.io/*",
+    "*://*.lever.co/*",
+    "*://*.workday.com/*",
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Jobert Side Panel"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "all_frames": true
+    }
+  ]
+}

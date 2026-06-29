@@ -99,9 +99,31 @@ async def create_kb_page(token: str, parent_id: str) -> dict:
         ]
     }
     
+async def get_kb_content(token: str, page_id: str) -> str:
+    """
+    Fetches the content of the Notion KB page and returns it as a plain text string.
+    """
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": NOTION_VERSION,
+    }
+    
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload)
+        response = await client.get(url, headers=headers)
         if response.status_code != 200:
             logger.error(f"Notion API error: {response.text}")
-            response.raise_for_status()
-        return response.json()
+            return ""
+        
+        data = response.json()
+        text_content = []
+        
+        for block in data.get("results", []):
+            block_type = block.get("type")
+            if block_type in ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item"]:
+                rich_text = block.get(block_type, {}).get("rich_text", [])
+                text = "".join([t.get("plain_text", "") for t in rich_text])
+                if text:
+                    text_content.append(text)
+        
+        return "\n".join(text_content)
