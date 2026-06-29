@@ -1,96 +1,71 @@
-import google.generativeai as genai
-import httpx
-import io
-import PyPDF2
-from typing import List, Dict
-from .encryption import decrypt_string
-from .notion_api import get_kb_content
+"""Grounded application answer generation.
 
-async def extract_pdf_text(url: str) -> str:
-    """Downloads a PDF from a URL and extracts its text."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        if response.status_code != 200:
-            return ""
-        
-        pdf_file = io.BytesIO(response.content)
-        reader = PyPDF2.PdfReader(pdf_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-        return text
+Jobert only calls Gemini when a user or server API key is configured. The
+deterministic drafts created by the database remain available as a safe
+fallback, so application preparation never depends on an external service.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import httpx
+
+from .config import settings
+from .encryption import decrypt_string
+
 
 async def generate_tailored_answers(
-    user_data: dict, 
-    job_url: str, 
-    questions: List[Dict[str, str]]
-) -> Dict[str, str]:
-    """
-    Uses Gemini to generate tailored answers based on user's CV and Notion KB.
-    """
-    # 1. Decrypt keys
-    gemini_key = decrypt_string(user_data.get("gemini_api_key"))
-    notion_token = decrypt_string(user_data.get("notion_token"))
-    
-    if not gemini_key:
-        raise Exception("Gemini API key not found for user.")
+    user_data: dict[str, Any],
+    job: dict[str, Any],
+    questions: list[dict[str, Any]],
+    cv_text: str,
+) -> dict[str, str]:
+    encrypted_key = user_data.get("gemini_api_key") or ""
+    api_key = decrypt_string(encrypted_key) if encrypted_key else settings.GEMINI_API_KEY
+    if not api_key:
+        return {}
 
-    # 2. Gather User Context
-    cv_text = ""
-    if user_data.get("cv_url"):
-        cv_text = await extract_pdf_text(user_data["cv_url"])
-    
-    kb_text = ""
-    if user_data.get("notion_kb_page_id") and notion_token:
-        kb_text = await get_kb_content(notion_token, user_data["notion_kb_page_id"])
-
-    # 3. Configure Gemini
-    genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-
-    # 4. Construct Prompt
-    # We include instructions to be concise and stick to the user's data.
+    profile = {
+        "name": user_data.get("name"),
+        "current_title": user_data.get("title"),
+        "location": user_data.get("location"),
+        "work_authorisation": user_data.get("work_authorisation"),
+        "skills": json.loads(user_data.get("skills_json") or "[]"),
+    }
+    question_payload = [{"id": item["id"], "question": item["question"]} for item in questions]
     prompt = f"""
-    You are an expert job application assistant. Your goal is to answer specific form questions 
-    for a job application at the following URL: {job_url}
+You are Jobert, a careful job-application assistant. Draft concise first-person
+answers for the supplied questions. Use only facts present in the profile and
+CV. Never invent employers, projects, dates, metrics, qualifications, or legal
+status. If evidence is missing, write a short square-bracketed instruction for
+the candidate to fill in. Tailor motivation to the job details without claiming
+knowledge not shown below. Return one JSON object mapping each question id to
+its answer, with no prose outside the JSON.
 
-    USER BACKGROUND (from CV):
-    {cv_text}
+JOB:
+{json.dumps({"role": job.get("role"), "company": job.get("company"), "location": job.get("location"), "summary": job.get("summary"), "categories": job.get("categories")}, ensure_ascii=False)}
 
-    USER PREFERENCES & ADDITIONAL INFO (from Knowledge Base):
-    {kb_text}
+PROFILE:
+{json.dumps(profile, ensure_ascii=False)}
 
-    QUESTIONS TO ANSWER:
-    {questions}
+CV TEXT:
+{cv_text[:24000] or "No CV text was available."}
 
-    INSTRUCTIONS:
-    1. Answer every question listed above based ONLY on the provided user context.
-    2. If a question asks for contact info (email, phone, LinkedIn), use the exact values from the CV.
-    3. For open-ended questions (e.g., "Why do you want to work here?"), use the Knowledge Base and CV to tailor the answer to the job.
-    4. Keep answers professional, concise, and ready to be pasted into a form.
-    5. RETURN THE ANSWERS IN A JSON FORMAT where the key is the "id" provided in the QUESTIONS list and the value is your generated answer.
-    
-    Format:
-    {{
-      "id_1": "answer_1",
-      "id_2": "answer_2"
-    }}
-    """
+QUESTIONS:
+{json.dumps(question_payload, ensure_ascii=False)}
+""".strip()
 
-    # 5. Call LLM
-    response = model.generate_content(prompt)
-    
-    try:
-        # Clean response if it contains markdown code blocks
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:-3].strip()
-        elif text.startswith("```"):
-            text = text[3:-3].strip()
-        
-        import json
-        return json.loads(text)
-    except Exception as e:
-        print(f"Failed to parse Gemini response: {e}\nRaw response: {response.text}")
-        # Fallback to simple logic if JSON parsing fails
-        return {q["id"]: "Error generating answer" for q in questions}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.25},
+    }
+    async with httpx.AsyncClient(timeout=45) as client:
+        response = await client.post(url, params={"key": api_key}, json=payload)
+        response.raise_for_status()
+        body = response.json()
+    text = body["candidates"][0]["content"]["parts"][0]["text"]
+    answers = json.loads(text)
+    return {str(key): str(value) for key, value in answers.items() if isinstance(value, str)}

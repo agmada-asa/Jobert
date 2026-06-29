@@ -6,6 +6,9 @@ __pycache__/
 .env
 .venv
 
+# Local application data and uploaded CVs
+data/
+
 # IDEs
 .idea
 .vscode

@@ -9,15 +9,41 @@ Jobert is an AI-powered job application assistant that tracks internships and he
 | Component | Technology |
 | :--- | :--- |
 | **Scraper** | Python 3.11 (GitHub Actions) |
-| **Orchestrator** | FastAPI |
+| **Web app** | React + Vite |
+| **API / Orchestrator** | FastAPI |
+| **Primary database** | SQLite (local, private, zero setup) |
 | **Onboarding Bot** | Telegram Bot API (`python-telegram-bot`) |
-| **Database** | Supabase (Postgres + Storage) |
-| **AI Agent** | Gemini 3 Flash |
+| **Optional cloud database** | Supabase (legacy integration) |
+| **AI Agent** | Gemini 3.5 Flash (optional per-user key) |
 | **Knowledge Base** | Notion API |
 
 ---
 
-## One-time Setup
+## Run the web app
+
+The web app now includes persistent accounts, profiles, CV uploads, live jobs,
+saved jobs, application workspaces, answer review and application statuses.
+
+```bash
+# API (from the repository root)
+python -m venv .venv
+.venv/bin/pip install -r backend/requirements.txt
+.venv/bin/uvicorn backend.main:app --reload
+
+# UI (in a second terminal)
+cd app
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. Runtime data is stored under `data/` and is not
+committed. The current job catalog is stored in `jobs.json`; the scheduled
+scraper refreshes it alongside `seen_jobs.json`.
+
+Add a Gemini API key from Profile to enable AI-drafted answers. Without a key,
+Jobert creates conservative, editable fallback drafts and remains fully usable.
+
+## Optional integrations
 
 ### 1 · Telegram Configuration
 1. **Create a Bot**: Chat with [@BotFather](https://t.me/BotFather), send `/newbot`, and save your **Bot Token**.
@@ -27,7 +53,7 @@ Jobert is an AI-powered job application assistant that tracks internships and he
    - Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`.
    - Copy the `id` from the `"chat"` object (e.g., `-100...`).
 
-### 2 · Supabase Configuration
+### 2 · Supabase Configuration (legacy Telegram deployment)
 1. **Database**: Run the SQL in `schema.sql` in your Supabase SQL Editor.
 2. **Storage**: Create a **public** bucket named `cv_storage` in Supabase Storage.
 3. **Credentials**: Copy your `SUPABASE_URL` and `SUPABASE_KEY` (service_role) from **Project Settings → API**.

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
@@ -27,6 +28,7 @@ TELEGRAM_TOKEN: str = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID: str = os.environ.get("CHAT_ID", "")
 
 SEEN_JOBS_FILE: str = "seen_jobs.json"
+JOBS_FILE: str = "jobs.json"
 
 # Request headers that mimic a real browser to reduce the chance of blocks.
 HEADERS: dict[str, str] = {
@@ -58,6 +60,32 @@ def save_seen_jobs(seen: list[str]) -> None:
     """Overwrite seen_jobs.json with the updated list."""
     with open(SEEN_JOBS_FILE, "w", encoding="utf-8") as fh:
         json.dump(seen, fh, indent=2)
+
+
+def save_job_catalog(jobs: list[dict[str, Any]]) -> None:
+    """Merge complete job records into the catalog consumed by the web app."""
+    existing: dict[str, dict[str, Any]] = {}
+    if os.path.exists(JOBS_FILE):
+        try:
+            with open(JOBS_FILE, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, list):
+                existing = {str(item["id"]): item for item in data if isinstance(item, dict) and item.get("id")}
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    timestamp = datetime.now(UTC).isoformat()
+    for job in jobs:
+        previous = existing.get(str(job["id"]), {})
+        existing[str(job["id"])] = {
+            **previous,
+            **job,
+            "first_seen_at": previous.get("first_seen_at") or timestamp,
+            "last_seen_at": timestamp,
+        }
+
+    with open(JOBS_FILE, "w", encoding="utf-8") as fh:
+        json.dump(list(existing.values()), fh, indent=2, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +157,7 @@ def _is_relevant(title: str) -> bool:
     return bool(_ROLE_KEYWORDS.search(title))
 
 
-def scrape_trackr() -> list[dict[str, str]]:
+def scrape_trackr() -> list[dict[str, Any]]:
     """
     Fetch jobs for every configured season from the Trackr hidden JSON API.
 
@@ -151,7 +179,7 @@ def scrape_trackr() -> list[dict[str, str]]:
     Returns a normalised list:
         [{"id": str, "role": str, "company": str, "link": str}, ...]
     """
-    jobs: list[dict[str, str]] = []
+    jobs: list[dict[str, Any]] = []
     seen_job_ids: set[str] = set()
 
     for season in TRACKR_SEASONS:
@@ -179,7 +207,7 @@ def scrape_trackr() -> list[dict[str, str]]:
 
         season_jobs = 0
         for item in data:
-            job = _normalise_trackr_job(item)
+            job = _normalise_trackr_job(item, season)
             if job is None or job["id"] in seen_job_ids:
                 continue
             jobs.append(job)
@@ -191,7 +219,7 @@ def scrape_trackr() -> list[dict[str, str]]:
     return jobs
 
 
-def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
+def _normalise_trackr_job(item: Any, season: str = "") -> dict[str, Any] | None:
     """Validate and normalise one Trackr API programme."""
     if not isinstance(item, dict):
         return None
@@ -211,8 +239,10 @@ def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
 
     company_info = item.get("company")
     company_name = "Unknown"
+    company_description = ""
     if isinstance(company_info, dict):
         company_name = str(company_info.get("name") or "Unknown")
+        company_description = str(company_info.get("description") or "").strip()
     elif item.get("company"):
         company_name = str(item.get("company"))
 
@@ -226,6 +256,14 @@ def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
         "role": role or "Unknown Role",
         "company": company_name,
         "link": link,
+        "location": ", ".join(str(value) for value in (item.get("locations") or []) if value) or "United Kingdom",
+        "summary": company_description,
+        "source": "trackr",
+        "season": str(item.get("season") or season),
+        "categories": categories if isinstance(categories, list) else [],
+        "closing_date": item.get("closingDate"),
+        "cv_required": item.get("cv"),
+        "cover_letter_required": item.get("coverLetter"),
     }
 
 
@@ -245,8 +283,10 @@ def run() -> None:
     seen: list[str] = load_seen_jobs()
     seen_set: set[str] = set(seen)
 
-    all_jobs: list[dict[str, str]] = []
+    all_jobs: list[dict[str, Any]] = []
     all_jobs.extend(scrape_trackr())
+    save_job_catalog(all_jobs)
+    print(f"Catalog updated — {len(all_jobs)} current jobs are available to the web app.")
 
     new_jobs = [job for job in all_jobs if job["id"] not in seen_set]
     print(f"Total new jobs to notify: {len(new_jobs)}")

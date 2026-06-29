@@ -15,13 +15,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Fetch the latest commit so we can push the state update.
           fetch-depth: 1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -35,14 +35,14 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python scraper.py
 
-      - name: Commit & push updated seen_jobs.json (if changed)
+      - name: Commit & push updated job data (if changed)
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_jobs.json
+          git add seen_jobs.json jobs.json
           if git diff --cached --quiet; then
-            echo "No changes to seen_jobs.json — nothing to commit."
+            echo "No job data changes — nothing to commit."
           else
-            git commit -m "chore: update seen_jobs.json [skip ci]"
+            git commit -m "chore: update job catalog [skip ci]"
             git push
           fi
