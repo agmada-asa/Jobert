@@ -35,14 +35,15 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python scraper.py
 
-      - name: Commit & push updated seen_jobs.json (if changed)
+      - name: Commit & push updated state (if changed)
+        if: always()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_jobs.json
+          git add seen_jobs.json api_health.json
           if git diff --cached --quiet; then
-            echo "No changes to seen_jobs.json — nothing to commit."
+            echo "No state changes to commit."
           else
-            git commit -m "chore: update seen_jobs.json [skip ci]"
+            git commit -m "chore: update scraper state [skip ci]"
             git push
           fi

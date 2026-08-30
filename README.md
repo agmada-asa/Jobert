@@ -66,6 +66,18 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 ### Deployment
 The scraper continues to run on **GitHub Actions**. The backend (FastAPI + Bot) is designed to run on **Fly.io**, **DigitalOcean**, or any persistent VPS.
 
+### API health alerts
+Before sending job notifications, the scheduled scraper checks that Trackr still
+returns usable programme lists and the fields Jobert depends on. Invalid JSON,
+request failures, missing programme fields, changed response wrappers, or empty
+results across every configured season pause the scrape and send a Telegram API
+alert with a link to the failed GitHub Actions run.
+
+Jobert stores the failure fingerprint in `api_health.json`, so it sends one alert
+per distinct problem instead of repeating it every six hours. It sends a recovery
+message when the API becomes usable again. The workflow commits this health state
+even when the scraper fails.
+
 ---
 
 ## Project Structure
