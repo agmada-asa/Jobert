@@ -153,6 +153,7 @@ def scrape_trackr() -> list[dict[str, str]]:
     """
     jobs: list[dict[str, str]] = []
     seen_job_ids: set[str] = set()
+    valid_responses = 0
 
     for season in TRACKR_SEASONS:
         try:
@@ -171,14 +172,17 @@ def scrape_trackr() -> list[dict[str, str]]:
             print(f"WARNING: Trackr season {season} returned invalid JSON: {exc}")
             continue
 
-        if not isinstance(data, list):
+        programmes = _extract_programmes(data)
+        if programmes is None:
             print(
-                f"WARNING: Trackr season {season} response is not a list; skipping."
+                f"WARNING: Trackr season {season} response has no programmes list; "
+                "skipping."
             )
             continue
+        valid_responses += 1
 
         season_jobs = 0
-        for item in data:
+        for item in programmes:
             job = _normalise_trackr_job(item)
             if job is None or job["id"] in seen_job_ids:
                 continue
@@ -187,8 +191,22 @@ def scrape_trackr() -> list[dict[str, str]]:
             season_jobs += 1
         print(f"Trackr {season}: found {season_jobs} relevant jobs.")
 
+    if valid_responses == 0:
+        raise RuntimeError(
+            "Trackr returned no usable programme responses for any configured season."
+        )
+
     print(f"Trackr: found {len(jobs)} relevant jobs across all seasons.")
     return jobs
+
+
+def _extract_programmes(data: Any) -> list[Any] | None:
+    """Return programme records from the current or legacy Trackr response."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("programmes"), list):
+        return data["programmes"]
+    return None
 
 
 def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
