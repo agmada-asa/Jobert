@@ -26,16 +26,19 @@ class ExtractProgrammesTests(unittest.TestCase):
         self.assertIsNone(scraper._extract_programmes({"programmes": {}}))
 
 
+@patch("scraper.time.sleep")
 class ScrapeTrackrTests(unittest.TestCase):
     @patch.object(scraper, "TRACKR_SEASONS", ("2027",))
     @patch("scraper.requests.get")
-    def test_scrapes_current_trackr_response(self, get: Mock):
+    def test_scrapes_current_trackr_response(self, get: Mock, sleep: Mock):
         response = Mock()
         response.json.return_value = {"programmes": [PROGRAMME], "groups": []}
         get.return_value = response
 
         jobs = scraper.scrape_trackr()
 
+        # The same programme id is returned for every mocked request (one per
+        # programme type), so dedup keeps only the first — summer-internships.
         self.assertEqual(
             jobs,
             [
@@ -44,14 +47,20 @@ class ScrapeTrackrTests(unittest.TestCase):
                     "role": "Software Engineering Internship",
                     "company": "Example Ltd",
                     "link": "https://example.com/apply",
+                    "label": "Internship",
+                    "emoji": "🆕",
                 }
             ],
         )
-        response.raise_for_status.assert_called_once_with()
+        self.assertEqual(
+            response.raise_for_status.call_count, len(scraper.TRACKR_PROGRAMME_TYPES)
+        )
 
     @patch.object(scraper, "TRACKR_SEASONS", ("2027",))
     @patch("scraper.requests.get")
-    def test_fails_when_every_response_has_an_unsupported_shape(self, get: Mock):
+    def test_fails_when_every_response_has_an_unsupported_shape(
+        self, get: Mock, sleep: Mock
+    ):
         response = Mock()
         response.json.return_value = {"groups": []}
         get.return_value = response
@@ -63,7 +72,7 @@ class ScrapeTrackrTests(unittest.TestCase):
 
     @patch.object(scraper, "TRACKR_SEASONS", ("2027",))
     @patch("scraper.requests.get")
-    def test_fails_when_programme_fields_are_renamed(self, get: Mock):
+    def test_fails_when_programme_fields_are_renamed(self, get: Mock, sleep: Mock):
         response = Mock()
         response.json.return_value = {
             "programmes": [{"programmeId": "programme-1", "label": "Intern"}]
@@ -75,7 +84,7 @@ class ScrapeTrackrTests(unittest.TestCase):
 
     @patch.object(scraper, "TRACKR_SEASONS", ("2027",))
     @patch("scraper.requests.get")
-    def test_fails_when_every_programme_list_is_empty(self, get: Mock):
+    def test_fails_when_every_programme_list_is_empty(self, get: Mock, sleep: Mock):
         response = Mock()
         response.json.return_value = {"programmes": [], "groups": []}
         get.return_value = response

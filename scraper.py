@@ -17,8 +17,9 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 import requests
 
@@ -122,8 +123,11 @@ def format_job_message(job: dict[str, str]) -> str:
     role = job.get("role", "Unknown Role")
     company = job.get("company", "Unknown Company")
     link = job.get("link", "#")
+    emoji = job.get("emoji", "🆕")
+    label = job.get("label", "Internship")
     return (
-        f"🆕 <b>{role}</b>\n"
+        f"{emoji} <b>{role}</b>\n"
+        f"🏷 {label}\n"
         f"🏢 <i>{company}</i>\n"
         f'🔗 <a href="{link}">Apply here</a>'
     )
@@ -236,21 +240,78 @@ def _record_api_recovery() -> None:
 # Scraper 1 — Trackr JSON API (mock / real)
 # ---------------------------------------------------------------------------
 
-# Trackr programmes API for all currently available UK Tech summer-internship
-# seasons. Add newly published seasons here as Trackr makes them available.
+# Trackr programmes API for all currently available UK Tech seasons. Add newly
+# published seasons here as Trackr makes them available.
 TRACKR_API_URL = "https://api.the-trackr.com/programmes"
 TRACKR_SEASONS: tuple[str, ...] = ("2026", "2027", "2028")
 TRACKR_PARAMS: dict[str, str] = {
     "region": "UK",
     "industry": "Tech",
-    "type": "summer-internships",
 }
 
-# Keywords used to filter relevant opportunities.
+# Scraping 4 programme types x 3 seasons means 12 requests per run instead of
+# the original 3. A short delay between requests avoids bursting the API,
+# which was observed to return soft-empty responses under rapid, back-to-back
+# requests.
+TRACKR_REQUEST_DELAY_SECONDS = 1.0
+
+# Keywords used to filter relevant opportunities. Only applied to programme
+# types (below) where the "Tech" industry filter alone can still admit
+# non-technical roles (e.g. a marketing internship at a tech company).
 _ROLE_KEYWORDS = re.compile(
     r"intern|internship|spring\s*week|placement|co.?op|"
     r"software\s*eng|swe|ai|ml|machine\s*learning|quant",
     re.IGNORECASE,
+)
+
+
+class TrackrProgrammeType(NamedTuple):
+    """One Trackr `type` query value and how to treat its results."""
+
+    type: str
+    label: str
+    emoji: str
+    filter_by_keyword: bool
+    alert_on_empty: bool
+
+
+# Every UK Tech programme category Jobert tracks. `filter_by_keyword` guards
+# against non-technical roles slipping through under "Tech" industry; it's
+# only meaningful for actual job/placement listings — spring week and event
+# titles ("Launchpad Programme", "Discover Tech&AI") rarely contain those
+# keywords even when genuinely relevant, so keyword-filtering them would
+# wrongly discard almost everything. `alert_on_empty` is off for the newer,
+# lower-volume categories since it's normal for them to have zero live
+# listings for a future season — that's not an API breakage.
+TRACKR_PROGRAMME_TYPES: tuple[TrackrProgrammeType, ...] = (
+    TrackrProgrammeType(
+        type="summer-internships",
+        label="Internship",
+        emoji="🆕",
+        filter_by_keyword=True,
+        alert_on_empty=True,
+    ),
+    TrackrProgrammeType(
+        type="industrial-placements",
+        label="Industrial Placement",
+        emoji="🏗️",
+        filter_by_keyword=True,
+        alert_on_empty=False,
+    ),
+    TrackrProgrammeType(
+        type="spring-weeks",
+        label="Spring Week",
+        emoji="🌱",
+        filter_by_keyword=False,
+        alert_on_empty=False,
+    ),
+    TrackrProgrammeType(
+        type="events",
+        label="Event",
+        emoji="🎤",
+        filter_by_keyword=False,
+        alert_on_empty=False,
+    ),
 )
 
 
@@ -268,7 +329,9 @@ def _is_relevant(title: str) -> bool:
 
 def scrape_trackr() -> list[dict[str, str]]:
     """
-    Fetch jobs for every configured season from the Trackr hidden JSON API.
+    Fetch jobs for every configured season and programme type from the
+    Trackr hidden JSON API (summer internships, industrial placements,
+    spring weeks, and events — see TRACKR_PROGRAMME_TYPES).
 
         Expected API response shape (array of objects):
         [
@@ -286,74 +349,88 @@ def scrape_trackr() -> list[dict[str, str]]:
         ]
 
     Returns a normalised list:
-        [{"id": str, "role": str, "company": str, "link": str}, ...]
+        [{"id": str, "role": str, "company": str, "link": str, ...}, ...]
     """
     jobs: list[dict[str, str]] = []
     seen_job_ids: set[str] = set()
-    valid_responses = 0
-    programme_count = 0
     issues: list[str] = []
+    first_request = True
 
-    for season in TRACKR_SEASONS:
-        try:
-            response = requests.get(
-                TRACKR_API_URL,
-                params={**TRACKR_PARAMS, "season": season},
-                headers=HEADERS,
-                timeout=20,
-            )
-            response.raise_for_status()
-            data: Any = response.json()
-        except requests.RequestException as exc:
-            issue = f"season {season}: request failed: {exc}"
-            print(f"WARNING: {issue}")
-            issues.append(issue)
-            continue
-        except ValueError as exc:
-            issue = f"season {season}: response was not valid JSON: {exc}"
-            print(f"WARNING: {issue}")
-            issues.append(issue)
-            continue
+    for programme_type in TRACKR_PROGRAMME_TYPES:
+        valid_responses = 0
+        programme_count = 0
 
-        programmes = _extract_programmes(data)
-        if programmes is None:
-            issue = (
-                f"season {season}: expected a programmes list, received "
-                f"{_describe_response(data)}"
-            )
-            print(f"WARNING: {issue}")
-            issues.append(issue)
-            continue
-
-        contract_issues = _programme_contract_issues(programmes, season)
-        if contract_issues:
-            for issue in contract_issues:
+        for season in TRACKR_SEASONS:
+            context = f"type {programme_type.type}, season {season}"
+            if first_request:
+                first_request = False
+            else:
+                time.sleep(TRACKR_REQUEST_DELAY_SECONDS)
+            try:
+                response = requests.get(
+                    TRACKR_API_URL,
+                    params={**TRACKR_PARAMS, "type": programme_type.type, "season": season},
+                    headers=HEADERS,
+                    timeout=20,
+                )
+                response.raise_for_status()
+                data: Any = response.json()
+            except requests.RequestException as exc:
+                issue = f"{context}: request failed: {exc}"
                 print(f"WARNING: {issue}")
-            issues.extend(contract_issues)
-            continue
-
-        valid_responses += 1
-        programme_count += len(programmes)
-
-        season_jobs = 0
-        for item in programmes:
-            job = _normalise_trackr_job(item)
-            if job is None or job["id"] in seen_job_ids:
+                issues.append(issue)
                 continue
-            jobs.append(job)
-            seen_job_ids.add(job["id"])
-            season_jobs += 1
-        print(f"Trackr {season}: found {season_jobs} relevant jobs.")
+            except ValueError as exc:
+                issue = f"{context}: response was not valid JSON: {exc}"
+                print(f"WARNING: {issue}")
+                issues.append(issue)
+                continue
 
-    if valid_responses == 0 and not issues:
-        issues.append("no configured season returned a usable programmes list")
-    elif valid_responses > 0 and programme_count == 0:
-        issues.append("all configured seasons returned empty programmes lists")
+            programmes = _extract_programmes(data)
+            if programmes is None:
+                issue = (
+                    f"{context}: expected a programmes list, received "
+                    f"{_describe_response(data)}"
+                )
+                print(f"WARNING: {issue}")
+                issues.append(issue)
+                continue
+
+            contract_issues = _programme_contract_issues(programmes, context)
+            if contract_issues:
+                for issue in contract_issues:
+                    print(f"WARNING: {issue}")
+                issues.extend(contract_issues)
+                continue
+
+            valid_responses += 1
+            programme_count += len(programmes)
+
+            found = 0
+            for item in programmes:
+                job = _normalise_trackr_job(item, programme_type)
+                if job is None or job["id"] in seen_job_ids:
+                    continue
+                jobs.append(job)
+                seen_job_ids.add(job["id"])
+                found += 1
+            print(f"Trackr {context}: found {found} relevant jobs.")
+
+        if valid_responses == 0:
+            issues.append(
+                f"type {programme_type.type}: no configured season returned a "
+                "usable programmes list"
+            )
+        elif programme_type.alert_on_empty and programme_count == 0:
+            issues.append(
+                f"type {programme_type.type}: all configured seasons returned "
+                "empty programmes lists"
+            )
 
     if issues:
         raise TrackrApiError(issues)
 
-    print(f"Trackr: found {len(jobs)} relevant jobs across all seasons.")
+    print(f"Trackr: found {len(jobs)} relevant jobs across all seasons and types.")
     return jobs
 
 
@@ -376,13 +453,13 @@ def _describe_response(data: Any) -> str:
     return type(data).__name__
 
 
-def _programme_contract_issues(programmes: list[Any], season: str) -> list[str]:
+def _programme_contract_issues(programmes: list[Any], context: str) -> list[str]:
     """Detect breaking changes to fields used by the normaliser."""
     if not programmes:
         return []
     records = [item for item in programmes if isinstance(item, dict)]
     if not records:
-        return [f"season {season}: programmes contains no object records"]
+        return [f"{context}: programmes contains no object records"]
 
     required_fields = {
         "id": lambda item: bool(item.get("id")),
@@ -396,24 +473,25 @@ def _programme_contract_issues(programmes: list[Any], season: str) -> list[str]:
     ]
     if not missing:
         return []
-    return [
-        f"season {season}: programme records have no usable {', '.join(missing)} field"
-    ]
+    return [f"{context}: programme records have no usable {', '.join(missing)} field"]
 
 
-def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
+def _normalise_trackr_job(
+    item: Any, programme_type: TrackrProgrammeType
+) -> dict[str, str] | None:
     """Validate and normalise one Trackr API programme."""
     if not isinstance(item, dict):
         return None
 
     role: str = str(item.get("name") or item.get("title") or "")
-    categories = item.get("categories")
-    categories_text = ""
-    if isinstance(categories, list):
-        categories_text = " ".join(str(cat) for cat in categories)
 
-    if not _is_relevant(f"{role} {categories_text}".strip()):
-        return None
+    if programme_type.filter_by_keyword:
+        categories = item.get("categories")
+        categories_text = ""
+        if isinstance(categories, list):
+            categories_text = " ".join(str(cat) for cat in categories)
+        if not _is_relevant(f"{role} {categories_text}".strip()):
+            return None
 
     job_id = str(item.get("id") or "")
     if not job_id:
@@ -436,6 +514,8 @@ def _normalise_trackr_job(item: Any) -> dict[str, str] | None:
         "role": role or "Unknown Role",
         "company": company_name,
         "link": link,
+        "label": programme_type.label,
+        "emoji": programme_type.emoji,
     }
 
 
