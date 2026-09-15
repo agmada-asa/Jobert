@@ -97,6 +97,7 @@ class ScrapeTrackrTests(unittest.TestCase):
                     "role": "Software Engineering Internship",
                     "company": "Example Ltd",
                     "link": "https://example.com/apply",
+                    "opening_date": PROGRAMME["openingDate"],
                     "label": "Internship",
                     "emoji": "🆕",
                 }
@@ -161,7 +162,7 @@ class NotificationBatchTests(unittest.TestCase):
         self.jobs = [
             {"id": f"trackr_{index}", "role": f"Placement {index}",
              "company": "Example & Co", "link": "https://example.com/apply?a=1&b=2",
-             "label": "Industrial Placement"}
+             "label": "Industrial Placement", "opening_date": "2026-09-09"}
             for index in range(15)
         ]
 
@@ -184,8 +185,46 @@ class NotificationBatchTests(unittest.TestCase):
         self.assertIn("11-15 of 15", send.call_args_list[1].args[0])
         self.assertIn("Example &amp; Co", send.call_args_list[0].args[0])
         self.assertIn("a=1&amp;b=2", send.call_args_list[0].args[0])
+        self.assertIn("Opened 9 Sep 2026", send.call_args_list[0].args[0])
         save.assert_called_once_with([job["id"] for job in self.jobs[10:]])
         sleep.assert_called_once_with(2)
+
+    @patch("scraper._record_api_recovery")
+    @patch("scraper.save_seen_jobs")
+    @patch("scraper.send_telegram_message", return_value=True)
+    @patch("scraper._is_active", return_value=True)
+    @patch("scraper.scrape_trackr")
+    @patch("scraper.load_seen_jobs", return_value=[])
+    def test_even_one_new_listing_sends_a_list_message(
+        self, load: Mock, scrape: Mock, active: Mock, send: Mock,
+        save: Mock, recover: Mock
+    ):
+        scrape.return_value = self.jobs[:1]
+        scraper.run()
+
+        send.assert_called_once()
+        self.assertIn("Open listings not sent before (1-1 of 1)", send.call_args.args[0])
+        save.assert_called_once_with(["trackr_0"])
+
+    @patch("scraper._record_api_recovery")
+    @patch("scraper.save_seen_jobs")
+    @patch("scraper.send_telegram_message", return_value=True)
+    @patch("scraper._is_active", return_value=True)
+    @patch("scraper.scrape_trackr")
+    @patch("scraper.load_seen_jobs", return_value=[])
+    def test_list_is_ordered_by_opening_date_newest_first(
+        self, load: Mock, scrape: Mock, active: Mock, send: Mock,
+        save: Mock, recover: Mock
+    ):
+        scrape.return_value = [
+            self.jobs[0],
+            {**self.jobs[1], "opening_date": "2026-09-15"},
+        ]
+        scraper.run()
+
+        message = send.call_args.args[0]
+        self.assertLess(message.index("Placement 1"), message.index("Placement 0"))
+        save.assert_called_once_with(["trackr_1", "trackr_0"])
 
 
 class ApiHealthMonitorTests(unittest.TestCase):

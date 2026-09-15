@@ -134,14 +134,20 @@ def format_job_message(job: dict[str, str]) -> str:
 
 
 def format_job_digest(jobs: list[dict[str, str]], start: int, total: int) -> str:
-    """Group a catch-up run into short messages instead of flooding the chat."""
-    lines = [f"<b>Open opportunities ({start + 1}-{start + len(jobs)} of {total})</b>"]
+    """List open, not-yet-notified programmes with their opening dates."""
+    lines = [
+        f"<b>Open listings not sent before ({start + 1}-{start + len(jobs)} of {total})</b>"
+    ]
     for job in jobs:
         link = html.escape(job["link"], quote=True)
         role = html.escape(job["role"])
         company = html.escape(job["company"])
         label = html.escape(job.get("label", "Internship"))
-        lines.append(f'• {label}: <a href="{link}">{role}</a> at {company}')
+        opening_date = date.fromisoformat(job["opening_date"])
+        opened = f"{opening_date.day} {opening_date:%b %Y}"
+        lines.append(
+            f'• Opened {opened}: <a href="{link}">{role}</a> at {company} [{label}]'
+        )
     return "\n".join(lines)
 
 
@@ -529,6 +535,7 @@ def _normalise_trackr_job(
         "role": role or "Unknown Role",
         "company": company_name,
         "link": link,
+        "opening_date": _trackr_date(item["openingDate"]).isoformat(),
         "label": programme_type.label,
         "emoji": programme_type.emoji,
     }
@@ -634,31 +641,22 @@ def run() -> None:
         else:
             print(f"Skipping inactive job: {job['role']} @ {job['company']}")
 
-    print(f"Total new active jobs to notify: {len(active_new_jobs)}")
+    active_new_jobs.sort(key=lambda job: job["opening_date"], reverse=True)
+    print(f"Total open, previously unsent jobs to notify: {len(active_new_jobs)}")
 
     newly_sent: list[str] = []
-    if len(active_new_jobs) > 8:
-        # A new Trackr category can expose hundreds of historical records at
-        # once. Telegram rate-limits per-job bursts; use small catch-up digests.
-        for start in range(0, len(active_new_jobs), 10):
-            batch = active_new_jobs[start : start + 10]
-            if start:
-                time.sleep(2)
-            success = send_telegram_message(
-                format_job_digest(batch, start, len(active_new_jobs))
-            )
-            if success:
-                newly_sent.extend(job["id"] for job in batch)
-            print(f"  {'✓' if success else '✗'} Digest: {len(batch)} opportunities")
-    else:
-        for job in active_new_jobs:
-            message = format_job_message(job)
-            success = send_telegram_message(message)
-            if success:
-                newly_sent.append(job["id"])
-                print(f"  ✓ Notified: {job['role']} @ {job['company']}")
-            else:
-                print(f"  ✗ Failed to notify: {job['role']} @ {job['company']}")
+    # One listing still uses the same list format; larger runs are split into
+    # small messages to stay below Telegram's size and rate limits.
+    for start in range(0, len(active_new_jobs), 10):
+        batch = active_new_jobs[start : start + 10]
+        if start:
+            time.sleep(2)
+        success = send_telegram_message(
+            format_job_digest(batch, start, len(active_new_jobs))
+        )
+        if success:
+            newly_sent.extend(job["id"] for job in batch)
+        print(f"  {'✓' if success else '✗'} List: {len(batch)} listings")
 
     if newly_sent:
         seen.extend(newly_sent)

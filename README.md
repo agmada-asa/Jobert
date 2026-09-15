@@ -76,9 +76,11 @@ alert with a link to the failed GitHub Actions run.
 
 Jobert only notifies programmes with a confirmed opening date on or before today,
 no past closing date, and a reachable external link. Missing or invalid
-dates are treated as unconfirmed. For catch-up runs with more than eight eligible
-programmes, it sends short digests in groups of ten rather than individual alerts.
-Only successfully sent programmes are added to `seen_jobs.json`.
+dates are treated as unconfirmed. Every run with at least one eligible programme
+not already in `seen_jobs.json` sends a clickable list, newest opening date first.
+It splits the list into messages of at most ten listings, with a two-second pause
+between messages. Only listings from successfully sent messages are added to
+`seen_jobs.json`; an empty run sends no job message.
 When Trackr supplies no closing date, openings older than 180 days are also
 treated as unconfirmed, since an old careers URL can still return HTTP 200.
 
