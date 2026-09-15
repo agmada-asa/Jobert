@@ -4,7 +4,20 @@ on:
   schedule:
     # Runs every 6 hours: 00:00, 06:00, 12:00, 18:00 UTC
     - cron: "0 */6 * * *"
-  workflow_dispatch: # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Scrape normally or send the reviewed overnight shortlist once"
+        type: choice
+        options:
+          - scrape
+          - burst-summary
+        default: scrape
+
+concurrency:
+  group: jobert-scraper-state
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   scrape:
@@ -30,17 +43,25 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run scraper
+        if: github.event_name != 'workflow_dispatch' || inputs.mode != 'burst-summary'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python scraper.py
+
+      - name: Send reviewed overnight shortlist
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'burst-summary'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python scraper.py --send-burst-summary
 
       - name: Commit & push updated state (if changed)
         if: always()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_jobs.json api_health.json
+          git add seen_jobs.json api_health.json burst_summary_2026-09-14.json
           if git diff --cached --quiet; then
             echo "No state changes to commit."
           else

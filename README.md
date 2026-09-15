@@ -76,13 +76,18 @@ alert with a link to the failed GitHub Actions run.
 
 Jobert only notifies programmes with a confirmed opening date on or before today,
 no past closing date, and a reachable external link. Missing or invalid
-dates are treated as unconfirmed. Every run with at least one eligible programme
-not already in `seen_jobs.json` sends a clickable list, newest opening date first.
-It splits the list into messages of at most ten listings, with a two-second pause
-between messages. Only listings from successfully sent messages are added to
+dates are treated as unconfirmed. Each eligible programme not already in
+`seen_jobs.json` gets an individual emoji alert, newest opening date first.
+Jobert sends at most 15 per run, waits two seconds between alerts, and defers
+any remaining listings to the next run. Only successful sends are added to
 `seen_jobs.json`; an empty run sends no job message.
 When Trackr supplies no closing date, openings older than 180 days are also
 treated as unconfirmed, since an old careers URL can still return HTTP 200.
+
+The reviewed 14-15 September burst shortlist is separate from routine alerts.
+The `burst-summary` manual workflow mode sends one clickable Telegram message
+from `burst_summary_2026-09-14.json`, then records `sent_at` so later dispatches
+do not repeat it. Scheduled runs never send this retrospective summary.
 
 Jobert stores the failure fingerprint in `api_health.json`, so it sends one alert
 per distinct problem instead of repeating it every six hours. It sends a recovery

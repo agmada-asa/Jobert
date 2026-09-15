@@ -1,5 +1,11 @@
+import html
+import json
+import re
+import shutil
+import tempfile
 import unittest
 from datetime import date, datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import scraper
@@ -157,37 +163,37 @@ class ScrapeTrackrTests(unittest.TestCase):
             scraper.scrape_trackr()
 
 
-class NotificationBatchTests(unittest.TestCase):
+class IndividualAlertTests(unittest.TestCase):
     def setUp(self):
         self.jobs = [
             {"id": f"trackr_{index}", "role": f"Placement {index}",
              "company": "Example & Co", "link": "https://example.com/apply?a=1&b=2",
-             "label": "Industrial Placement", "opening_date": "2026-09-09"}
-            for index in range(15)
+             "label": "Industrial Placement", "emoji": "🏗️",
+             "opening_date": "2026-09-09"}
+            for index in range(17)
         ]
 
     @patch("scraper.time.sleep")
     @patch("scraper._record_api_recovery")
     @patch("scraper.save_seen_jobs")
-    @patch("scraper.send_telegram_message", side_effect=[False, True])
+    @patch("scraper.send_telegram_message", return_value=True)
     @patch("scraper._is_active", return_value=True)
     @patch("scraper.scrape_trackr")
     @patch("scraper.load_seen_jobs", return_value=[])
-    def test_catch_up_digests_only_mark_successfully_sent_jobs(
+    def test_large_run_is_paced_and_capped_at_15_individual_alerts(
         self, load: Mock, scrape: Mock, active: Mock, send: Mock,
         save: Mock, recover: Mock, sleep: Mock
     ):
         scrape.return_value = self.jobs
         scraper.run()
 
-        self.assertEqual(send.call_count, 2)
-        self.assertIn("1-10 of 15", send.call_args_list[0].args[0])
-        self.assertIn("11-15 of 15", send.call_args_list[1].args[0])
+        self.assertEqual(send.call_count, 15)
+        self.assertIn("🏗️ <b>Placement 0</b>", send.call_args_list[0].args[0])
         self.assertIn("Example &amp; Co", send.call_args_list[0].args[0])
         self.assertIn("a=1&amp;b=2", send.call_args_list[0].args[0])
-        self.assertIn("Opened 9 Sep 2026", send.call_args_list[0].args[0])
-        save.assert_called_once_with([job["id"] for job in self.jobs[10:]])
-        sleep.assert_called_once_with(2)
+        save.assert_called_once_with([job["id"] for job in self.jobs[:15]])
+        self.assertEqual(sleep.call_count, 14)
+        sleep.assert_any_call(2)
 
     @patch("scraper._record_api_recovery")
     @patch("scraper.save_seen_jobs")
@@ -195,7 +201,7 @@ class NotificationBatchTests(unittest.TestCase):
     @patch("scraper._is_active", return_value=True)
     @patch("scraper.scrape_trackr")
     @patch("scraper.load_seen_jobs", return_value=[])
-    def test_even_one_new_listing_sends_a_list_message(
+    def test_even_one_new_listing_sends_its_emoji_alert(
         self, load: Mock, scrape: Mock, active: Mock, send: Mock,
         save: Mock, recover: Mock
     ):
@@ -203,7 +209,9 @@ class NotificationBatchTests(unittest.TestCase):
         scraper.run()
 
         send.assert_called_once()
-        self.assertIn("Open listings not sent before (1-1 of 1)", send.call_args.args[0])
+        self.assertIn("🏗️ <b>Placement 0</b>", send.call_args.args[0])
+        self.assertIn("🏢 <i>Example &amp; Co</i>", send.call_args.args[0])
+        self.assertIn("🔗 <a href=", send.call_args.args[0])
         save.assert_called_once_with(["trackr_0"])
 
     @patch("scraper._record_api_recovery")
@@ -212,7 +220,7 @@ class NotificationBatchTests(unittest.TestCase):
     @patch("scraper._is_active", return_value=True)
     @patch("scraper.scrape_trackr")
     @patch("scraper.load_seen_jobs", return_value=[])
-    def test_list_is_ordered_by_opening_date_newest_first(
+    def test_individual_alerts_are_ordered_by_opening_date_newest_first(
         self, load: Mock, scrape: Mock, active: Mock, send: Mock,
         save: Mock, recover: Mock
     ):
@@ -222,9 +230,69 @@ class NotificationBatchTests(unittest.TestCase):
         ]
         scraper.run()
 
-        message = send.call_args.args[0]
-        self.assertLess(message.index("Placement 1"), message.index("Placement 0"))
+        self.assertIn("Placement 1", send.call_args_list[0].args[0])
+        self.assertIn("Placement 0", send.call_args_list[1].args[0])
         save.assert_called_once_with(["trackr_1", "trackr_0"])
+
+
+class BurstSummaryTests(unittest.TestCase):
+    def setUp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "burst.json"
+            shutil.copyfile(scraper.BURST_SUMMARY_FILE, target)
+            self.initial_state = json.loads(target.read_text(encoding="utf-8"))
+
+    def test_snapshot_is_the_19_burst_placements_and_fits_one_message(self):
+        items = self.initial_state["items"]
+        self.assertEqual(len(items), 19)
+        self.assertEqual(len({item["id"] for item in items}), 19)
+        self.assertTrue({item["id"] for item in items}.issubset(scraper.load_seen_jobs()))
+        message = scraper.format_burst_summary(items)
+        visible = html.unescape(re.sub(r"<[^>]+>", "", message))
+        self.assertLessEqual(len(visible), 4096)
+        self.assertIn("AWE, Year in Industry", message)
+        self.assertIn("closes 20 Sep", message)
+
+    @patch("scraper._is_open_programme", return_value=True)
+    @patch("scraper.send_telegram_message", return_value=True)
+    def test_explicit_dispatch_sends_once_and_records_success(
+        self, send: Mock, eligible: Mock
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "burst.json"
+            shutil.copyfile(scraper.BURST_SUMMARY_FILE, target)
+            with patch.object(scraper, "BURST_SUMMARY_FILE", str(target)):
+                scraper.send_burst_summary()
+                scraper.send_burst_summary()
+            send.assert_called_once()
+            self.assertIsNotNone(json.loads(target.read_text())["sent_at"])
+
+    @patch("scraper._is_open_programme", return_value=True)
+    @patch("scraper.send_telegram_message", return_value=False)
+    def test_failed_send_remains_pending(self, send: Mock, eligible: Mock):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "burst.json"
+            shutil.copyfile(scraper.BURST_SUMMARY_FILE, target)
+            with patch.object(scraper, "BURST_SUMMARY_FILE", str(target)):
+                with self.assertRaisesRegex(RuntimeError, "Could not send"):
+                    scraper.send_burst_summary()
+            self.assertIsNone(json.loads(target.read_text())["sent_at"])
+
+
+class TelegramDeliveryTests(unittest.TestCase):
+    @patch.object(scraper, "TELEGRAM_TOKEN", "test-token")
+    @patch.object(scraper, "CHAT_ID", "test-chat")
+    @patch("scraper.requests.post")
+    def test_http_200_without_api_confirmation_is_not_recorded(self, post: Mock):
+        post.return_value.json.return_value = {"ok": False}
+        self.assertFalse(scraper.send_telegram_message("Test"))
+
+    @patch.object(scraper, "TELEGRAM_TOKEN", "test-token")
+    @patch.object(scraper, "CHAT_ID", "test-chat")
+    @patch("scraper.requests.post")
+    def test_confirmed_telegram_response_counts_as_sent(self, post: Mock):
+        post.return_value.json.return_value = {"ok": True, "result": {}}
+        self.assertTrue(scraper.send_telegram_message("Test"))
 
 
 class ApiHealthMonitorTests(unittest.TestCase):

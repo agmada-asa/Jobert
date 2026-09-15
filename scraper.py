@@ -11,6 +11,7 @@ GitHub Actions workflow so duplicate notifications are never sent.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import html
 import json
@@ -32,6 +33,8 @@ CHAT_ID: str = os.environ.get("CHAT_ID", "")
 
 SEEN_JOBS_FILE: str = "seen_jobs.json"
 API_HEALTH_FILE: str = "api_health.json"
+BURST_SUMMARY_FILE: str = "burst_summary_2026-09-14.json"
+MAX_INDIVIDUAL_ALERTS_PER_RUN = 15
 
 # Request headers that mimic a real browser to reduce the chance of blocks.
 HEADERS: dict[str, str] = {
@@ -112,8 +115,12 @@ def send_telegram_message(text: str) -> bool:
     try:
         response = requests.post(url, json=payload, timeout=15)
         response.raise_for_status()
+        result = response.json()
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            print("ERROR sending Telegram message: API did not confirm delivery.")
+            return False
         return True
-    except requests.RequestException as exc:
+    except (requests.RequestException, ValueError) as exc:
         print(f"ERROR sending Telegram message: {exc}")
         return False
 
@@ -133,22 +140,59 @@ def format_job_message(job: dict[str, str]) -> str:
     )
 
 
-def format_job_digest(jobs: list[dict[str, str]], start: int, total: int) -> str:
-    """List open, not-yet-notified programmes with their opening dates."""
+def format_burst_summary(items: list[dict[str, Any]]) -> str:
+    """One clickable Telegram block for the reviewed overnight placements."""
     lines = [
-        f"<b>Open listings not sent before ({start + 1}-{start + len(jobs)} of {total})</b>"
+        "<b>Overnight industrial placements, reviewed shortlist</b>",
+        f"{len(items)} placements from the 100 alerts sent on 14-15 Sep 2026 "
+        "have confirmed opening dates and no past listed deadlines. "
+        "Check the employer page before applying.",
+        "",
     ]
-    for job in jobs:
-        link = html.escape(job["link"], quote=True)
-        role = html.escape(job["role"])
-        company = html.escape(job["company"])
-        label = html.escape(job.get("label", "Internship"))
-        opening_date = date.fromisoformat(job["opening_date"])
-        opened = f"{opening_date.day} {opening_date:%b %Y}"
+    for item in items:
+        opened = _trackr_date(item["openingDate"])
+        closing = _trackr_date(item.get("closingDate"))
+        opened_text = f"{opened.day} {opened:%b}"
+        closing_text = f"closes {closing.day} {closing:%b}" if closing else "no deadline listed"
+        label = html.escape(f'{item["company"]}, {item["role"]}')
+        link = html.escape(item["url"], quote=True)
         lines.append(
-            f'• Opened {opened}: <a href="{link}">{role}</a> at {company} [{label}]'
+            f'• Opened {opened_text}: <a href="{link}">{label}</a>, {closing_text}'
         )
     return "\n".join(lines)
+
+
+def send_burst_summary() -> None:
+    """Send the static, reviewed burst shortlist once, only on explicit dispatch."""
+    with open(BURST_SUMMARY_FILE, "r", encoding="utf-8") as fh:
+        state = json.load(fh)
+    if state.get("sent_at"):
+        print("Overnight shortlist was already sent; no Telegram message sent.")
+        return
+
+    items = state.get("items")
+    if not isinstance(items, list) or len(items) != 19:
+        raise RuntimeError("Overnight shortlist must contain the 19 reviewed placements")
+    ids = [item["id"] for item in items]
+    if len(set(ids)) != len(ids) or not set(ids).issubset(load_seen_jobs()):
+        raise RuntimeError("Overnight shortlist IDs do not match the notified job state")
+
+    today = datetime.now(timezone.utc).date()
+    eligible = [item for item in items if _is_open_programme(item, today)]
+    if not eligible:
+        raise RuntimeError("No shortlist placements still pass the date check")
+    message = format_burst_summary(eligible)
+    visible_text = html.unescape(re.sub(r"<[^>]+>", "", message))
+    if len(visible_text) > 4096:
+        raise RuntimeError("Overnight shortlist exceeds Telegram's message limit")
+
+    if not send_telegram_message(message):
+        raise RuntimeError("Could not send overnight shortlist to Telegram")
+    state["sent_at"] = datetime.now(timezone.utc).isoformat()
+    with open(BURST_SUMMARY_FILE, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, indent=2)
+        fh.write("\n")
+    print(f"Sent one overnight shortlist containing {len(eligible)} placements.")
 
 
 def _github_run_url() -> str:
@@ -645,18 +689,18 @@ def run() -> None:
     print(f"Total open, previously unsent jobs to notify: {len(active_new_jobs)}")
 
     newly_sent: list[str] = []
-    # One listing still uses the same list format; larger runs are split into
-    # small messages to stay below Telegram's size and rate limits.
-    for start in range(0, len(active_new_jobs), 10):
-        batch = active_new_jobs[start : start + 10]
-        if start:
+    # Individual emoji alerts are intentionally paced and capped so a category
+    # backfill cannot flood the chat. The newest openings are sent first.
+    for index, job in enumerate(active_new_jobs[:MAX_INDIVIDUAL_ALERTS_PER_RUN]):
+        if index:
             time.sleep(2)
-        success = send_telegram_message(
-            format_job_digest(batch, start, len(active_new_jobs))
-        )
+        success = send_telegram_message(format_job_message(job))
         if success:
-            newly_sent.extend(job["id"] for job in batch)
-        print(f"  {'✓' if success else '✗'} List: {len(batch)} listings")
+            newly_sent.append(job["id"])
+        print(f"  {'✓' if success else '✗'} Alert: {job['role']} @ {job['company']}")
+    deferred = max(0, len(active_new_jobs) - MAX_INDIVIDUAL_ALERTS_PER_RUN)
+    if deferred:
+        print(f"Deferred {deferred} eligible jobs to the next scheduled run.")
 
     if newly_sent:
         seen.extend(newly_sent)
@@ -667,10 +711,16 @@ def run() -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Jobert placement alerts")
+    parser.add_argument("--send-burst-summary", action="store_true")
+    args = parser.parse_args()
     if not TELEGRAM_TOKEN:
         print("ERROR: TELEGRAM_TOKEN environment variable is not set.")
         sys.exit(1)
     if not CHAT_ID:
         print("ERROR: CHAT_ID environment variable is not set.")
         sys.exit(1)
-    run()
+    if args.send_burst_summary:
+        send_burst_summary()
+    else:
+        run()
