@@ -18,7 +18,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
 import requests
@@ -126,11 +126,23 @@ def format_job_message(job: dict[str, str]) -> str:
     emoji = job.get("emoji", "🆕")
     label = job.get("label", "Internship")
     return (
-        f"{emoji} <b>{role}</b>\n"
-        f"🏷 {label}\n"
-        f"🏢 <i>{company}</i>\n"
-        f'🔗 <a href="{link}">Apply here</a>'
+        f"{emoji} <b>{html.escape(role)}</b>\n"
+        f"🏷 {html.escape(label)}\n"
+        f"🏢 <i>{html.escape(company)}</i>\n"
+        f'🔗 <a href="{html.escape(link, quote=True)}">Apply here</a>'
     )
+
+
+def format_job_digest(jobs: list[dict[str, str]], start: int, total: int) -> str:
+    """Group a catch-up run into short messages instead of flooding the chat."""
+    lines = [f"<b>Open opportunities ({start + 1}-{start + len(jobs)} of {total})</b>"]
+    for job in jobs:
+        link = html.escape(job["link"], quote=True)
+        role = html.escape(job["role"])
+        company = html.escape(job["company"])
+        label = html.escape(job.get("label", "Internship"))
+        lines.append(f'• {label}: <a href="{link}">{role}</a> at {company}')
+    return "\n".join(lines)
 
 
 def _github_run_url() -> str:
@@ -465,6 +477,7 @@ def _programme_contract_issues(programmes: list[Any], context: str) -> list[str]
         "id": lambda item: bool(item.get("id")),
         "name or title": lambda item: bool(item.get("name") or item.get("title")),
         "company": lambda item: bool(item.get("company")),
+        "openingDate": lambda item: "openingDate" in item,
     }
     missing = [
         field
@@ -481,6 +494,8 @@ def _normalise_trackr_job(
 ) -> dict[str, str] | None:
     """Validate and normalise one Trackr API programme."""
     if not isinstance(item, dict):
+        return None
+    if not _is_open_programme(item):
         return None
 
     role: str = str(item.get("name") or item.get("title") or "")
@@ -517,6 +532,43 @@ def _normalise_trackr_job(
         "label": programme_type.label,
         "emoji": programme_type.emoji,
     }
+
+
+def _trackr_date(value: Any) -> date | None:
+    """Read the calendar day from a Trackr ISO date without guessing missing dates."""
+    if not isinstance(value, str) or not re.match(r"^\d{4}-\d{2}-\d{2}(?:T|$)", value):
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _is_open_programme(item: dict[str, Any], today: date | None = None) -> bool:
+    """Only advertise programmes with a confirmed opening and no elapsed deadline.
+
+    Trackr includes historic and anticipated programmes alongside live ones. A
+    reachable URL alone does not mean applications are accepting submissions.
+    Closing dates are inclusive, so a programme closing today remains eligible.
+    Without a deadline, an opening older than six months is too stale to trust.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    opening = _trackr_date(item.get("openingDate"))
+    if opening is None or opening > today:
+        return False
+
+    closing_value = item.get("closingDate")
+    if closing_value is not None:
+        closing = _trackr_date(closing_value)
+        if closing is None or closing < today:
+            return False
+    elif opening < today - timedelta(days=180):
+        return False
+
+    status = item.get("status")
+    if status is not None and str(status).strip().lower() != "open":
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -585,14 +637,28 @@ def run() -> None:
     print(f"Total new active jobs to notify: {len(active_new_jobs)}")
 
     newly_sent: list[str] = []
-    for job in active_new_jobs:
-        message = format_job_message(job)
-        success = send_telegram_message(message)
-        if success:
-            newly_sent.append(job["id"])
-            print(f"  ✓ Notified: {job['role']} @ {job['company']}")
-        else:
-            print(f"  ✗ Failed to notify: {job['role']} @ {job['company']}")
+    if len(active_new_jobs) > 8:
+        # A new Trackr category can expose hundreds of historical records at
+        # once. Telegram rate-limits per-job bursts; use small catch-up digests.
+        for start in range(0, len(active_new_jobs), 10):
+            batch = active_new_jobs[start : start + 10]
+            if start:
+                time.sleep(2)
+            success = send_telegram_message(
+                format_job_digest(batch, start, len(active_new_jobs))
+            )
+            if success:
+                newly_sent.extend(job["id"] for job in batch)
+            print(f"  {'✓' if success else '✗'} Digest: {len(batch)} opportunities")
+    else:
+        for job in active_new_jobs:
+            message = format_job_message(job)
+            success = send_telegram_message(message)
+            if success:
+                newly_sent.append(job["id"])
+                print(f"  ✓ Notified: {job['role']} @ {job['company']}")
+            else:
+                print(f"  ✗ Failed to notify: {job['role']} @ {job['company']}")
 
     if newly_sent:
         seen.extend(newly_sent)
