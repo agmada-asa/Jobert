@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import requests
 import scraper
 
 
@@ -47,7 +48,8 @@ class ProgrammeEligibilityTests(unittest.TestCase):
         self.assertFalse(scraper._is_open_programme(item, self.today))
 
     def test_deadline_is_inclusive(self):
-        item = {**PROGRAMME, "closingDate": "2026-09-15T00:00:00.000Z"}
+        item = {**PROGRAMME, "openingDate": "2026-09-14T00:00:00.000Z",
+                "closingDate": "2026-09-15T00:00:00.000Z"}
         self.assertTrue(scraper._is_open_programme(item, self.today))
 
     def test_closed_programme_with_reachable_url_is_rejected(self):
@@ -84,6 +86,33 @@ class ProgrammeEligibilityTests(unittest.TestCase):
 
 @patch("scraper.time.sleep")
 class ScrapeTrackrTests(unittest.TestCase):
+    @patch.object(scraper, "TRACKR_SEASONS", ("2026",))
+    @patch("scraper.requests.get")
+    def test_retries_a_timeout_and_uses_the_recovered_response(
+        self, get: Mock, sleep: Mock
+    ):
+        response = Mock()
+        response.json.return_value = {"programmes": [PROGRAMME]}
+        get.side_effect = [requests.Timeout("temporary timeout"), response]
+        with patch.object(scraper, "TRACKR_PROGRAMME_TYPES", scraper.TRACKR_PROGRAMME_TYPES[:1]):
+            jobs = scraper.scrape_trackr()
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_called_once_with(2)
+
+    @patch.object(scraper, "TRACKR_SEASONS", ("2026",))
+    @patch("scraper.requests.get", side_effect=requests.Timeout("still timed out"))
+    def test_still_fails_after_bounded_timeout_retries(
+        self, get: Mock, sleep: Mock
+    ):
+        with patch.object(scraper, "TRACKR_PROGRAMME_TYPES", scraper.TRACKR_PROGRAMME_TYPES[:1]):
+            with self.assertRaisesRegex(scraper.TrackrApiError, "still timed out"):
+                scraper.scrape_trackr()
+
+        self.assertEqual(get.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4])
+
     @patch.object(scraper, "TRACKR_SEASONS", ("2027",))
     @patch("scraper.requests.get")
     def test_scrapes_current_trackr_response(self, get: Mock, sleep: Mock):
@@ -241,6 +270,7 @@ class BurstSummaryTests(unittest.TestCase):
             target = Path(directory) / "burst.json"
             shutil.copyfile(scraper.BURST_SUMMARY_FILE, target)
             self.initial_state = json.loads(target.read_text(encoding="utf-8"))
+            self.initial_state["sent_at"] = None
 
     def test_snapshot_is_the_19_burst_placements_and_fits_one_message(self):
         items = self.initial_state["items"]
@@ -260,7 +290,7 @@ class BurstSummaryTests(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "burst.json"
-            shutil.copyfile(scraper.BURST_SUMMARY_FILE, target)
+            target.write_text(json.dumps(self.initial_state), encoding="utf-8")
             with patch.object(scraper, "BURST_SUMMARY_FILE", str(target)):
                 scraper.send_burst_summary()
                 scraper.send_burst_summary()
@@ -272,7 +302,7 @@ class BurstSummaryTests(unittest.TestCase):
     def test_failed_send_remains_pending(self, send: Mock, eligible: Mock):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "burst.json"
-            shutil.copyfile(scraper.BURST_SUMMARY_FILE, target)
+            target.write_text(json.dumps(self.initial_state), encoding="utf-8")
             with patch.object(scraper, "BURST_SUMMARY_FILE", str(target)):
                 with self.assertRaisesRegex(RuntimeError, "Could not send"):
                     scraper.send_burst_summary()
