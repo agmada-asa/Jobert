@@ -73,6 +73,8 @@ returns usable programme lists and the fields Jobert depends on, including
 request failures, missing programme fields, changed response wrappers, or empty
 results across every configured season pause the scrape and send a Telegram API
 alert with a link to the failed GitHub Actions run.
+Timeouts and connection failures are retried twice for the affected request
+before the run pauses. Invalid responses still fail immediately.
 
 Jobert only notifies programmes with a confirmed opening date on or before today,
 no past closing date, and a reachable external link. Missing or invalid

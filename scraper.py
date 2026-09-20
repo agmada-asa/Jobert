@@ -216,8 +216,8 @@ def _format_api_failure_message(issues: list[str]) -> str:
     details = html.escape("\n".join(f"- {issue}" for issue in issues))
     message = (
         "<b>Jobert API alert</b>\n"
-        "Trackr's response no longer matches Jobert's expected contract. "
-        "Job notifications are paused until the response is valid again.\n\n"
+        "Jobert could not verify Trackr's API response. "
+        "Job notifications are paused until the API check passes.\n\n"
         f"<code>{details}</code>"
     )
     run_url = _github_run_url()
@@ -275,7 +275,7 @@ def _record_api_recovery() -> None:
 
     message = (
         "<b>Jobert API recovered</b>\n"
-        "Trackr's response matches the expected contract again. "
+        "Trackr's API check is passing again. "
         "Job notifications have resumed."
     )
     run_url = _github_run_url()
@@ -316,6 +316,7 @@ TRACKR_PARAMS: dict[str, str] = {
 # which was observed to return soft-empty responses under rapid, back-to-back
 # requests.
 TRACKR_REQUEST_DELAY_SECONDS = 1.0
+TRACKR_REQUEST_RETRIES = 2
 
 # Keywords used to filter relevant opportunities. Only applied to programme
 # types (below) where the "Tech" industry filter alone can still admit
@@ -389,6 +390,26 @@ def _is_relevant(title: str) -> bool:
     return bool(_ROLE_KEYWORDS.search(title))
 
 
+def _request_trackr_programmes(params: dict[str, str]) -> Any:
+    """Retry a failed GET before treating a season as unavailable."""
+    for attempt in range(TRACKR_REQUEST_RETRIES + 1):
+        try:
+            response = requests.get(
+                TRACKR_API_URL,
+                params=params,
+                headers=HEADERS,
+                timeout=(5, 20),
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            if attempt == TRACKR_REQUEST_RETRIES:
+                raise
+            delay = 2 ** (attempt + 1)
+            print(f"WARNING: Trackr request failed: {exc}; retrying in {delay}s.")
+            time.sleep(delay)
+
+
 def scrape_trackr() -> list[dict[str, str]]:
     """
     Fetch jobs for every configured season and programme type from the
@@ -429,14 +450,9 @@ def scrape_trackr() -> list[dict[str, str]]:
             else:
                 time.sleep(TRACKR_REQUEST_DELAY_SECONDS)
             try:
-                response = requests.get(
-                    TRACKR_API_URL,
-                    params={**TRACKR_PARAMS, "type": programme_type.type, "season": season},
-                    headers=HEADERS,
-                    timeout=20,
+                data: Any = _request_trackr_programmes(
+                    {**TRACKR_PARAMS, "type": programme_type.type, "season": season}
                 )
-                response.raise_for_status()
-                data: Any = response.json()
             except requests.RequestException as exc:
                 issue = f"{context}: request failed: {exc}"
                 print(f"WARNING: {issue}")
