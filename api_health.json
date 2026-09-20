@@ -1,4 +1,9 @@
 {
-  "recovery_notified": true,
-  "status": "healthy"
+  "detected_at": "2026-09-20T10:14:55.237458+00:00",
+  "fingerprint": "d18436938e7dc048",
+  "issues": [
+    "type summer-internships, season 2026: request failed: HTTPSConnectionPool(host='api.the-trackr.com', port=443): Read timed out. (read timeout=20)"
+  ],
+  "notified": true,
+  "status": "unhealthy"
 }
