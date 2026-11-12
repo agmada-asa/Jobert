@@ -1,17 +1,5 @@
 {
-  "detected_at": "2026-11-12T00:04:48.263284+00:00",
-  "fingerprint": "d57e9171dabcebf0",
-  "issues": [
-    "type summer-internships, season 2026: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=summer-internships&season=2026",
-    "type summer-internships, season 2027: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=summer-internships&season=2027",
-    "type summer-internships, season 2028: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=summer-internships&season=2028",
-    "type summer-internships: no configured season returned a usable programmes list",
-    "type industrial-placements, season 2026: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=industrial-placements&season=2026",
-    "type industrial-placements, season 2027: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=industrial-placements&season=2027",
-    "type industrial-placements, season 2028: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=industrial-placements&season=2028",
-    "type industrial-placements: no configured season returned a usable programmes list",
-    "type spring-weeks, season 2026: request failed: 502 Server Error: Bad Gateway for url: https://api.the-trackr.com/programmes?region=UK&industry=Tech&type=spring-weeks&season=2026"
-  ],
-  "notified": true,
-  "status": "unhealthy"
+  "recovered_at": "2026-11-12T06:04:44.895697+00:00",
+  "recovery_notified": true,
+  "status": "healthy"
 }
